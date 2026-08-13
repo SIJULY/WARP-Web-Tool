@@ -18,7 +18,9 @@ from playwright.async_api import async_playwright
 
 app = FastAPI(title="ZERO-Sijuly Web Tool")
 templates = Jinja2Templates(directory="templates")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("warp-web-tool")
+logger.setLevel(logging.INFO)
 
 
 async def send_log(websocket: WebSocket, msg: str):

@@ -247,6 +247,13 @@
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
 
+        ws.onopen = function () {
+            const div = document.createElement('div');
+            div.innerHTML = `<span class="text-gray-500">[${new Date().toLocaleTimeString()}]</span> > ✅ WebSocket 已连接，可以开始操作。`;
+            logArea.appendChild(div);
+            logArea.scrollTop = logArea.scrollHeight;
+        };
+
         ws.onmessage = function (event) {
             const data = JSON.parse(event.data);
 
@@ -286,6 +293,20 @@
         ws.onclose = function () {
             setTimeout(connectWebSocket, 1000);
         };
+    }
+
+    function sendWS(payload) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            const msg = "WebSocket 尚未连接，请等待 1 秒后重试，或刷新页面。";
+            const div = document.createElement('div');
+            div.innerHTML = `<span class="text-gray-500">[${new Date().toLocaleTimeString()}]</span> > ❌ ${msg}`;
+            logArea.appendChild(div);
+            logArea.scrollTop = logArea.scrollHeight;
+            alert(msg);
+            return false;
+        }
+        ws.send(JSON.stringify(payload));
+        return true;
     }
 
     // 核心渲染逻辑：逐字插入，光标替代横线
@@ -332,17 +353,17 @@
         resetOTPUI();
         resetResultUI();
 
-        ws.send(JSON.stringify({
+        sendWS({
             action: 'start_extract',
             org: org,
             email: email,
             proxy_name: document.getElementById('proxy_name').value
-        }));
+        });
     }
 
     function startScan() {
         logArea.innerHTML = `<div><span class="text-gray-500">[${new Date().toLocaleTimeString()}]</span> > 启动 IP 优选任务...</div>`;
-        ws.send(JSON.stringify({action: 'start_scan'}));
+        sendWS({action: 'start_scan'});
     }
 
     function submitOTP() {
@@ -353,7 +374,7 @@
         otpInput.disabled = true;
         resetOTPUI();
 
-        ws.send(JSON.stringify({action: 'submit_otp', otp: otp}));
+        sendWS({action: 'submit_otp', otp: otp});
     }
 
     function resetOTPUI() {
