@@ -1,0 +1,7 @@
+# WARP Web Tool default Caddyfile.
+# install.sh 会在选择“域名 + 自动 HTTPS”且 VPS 未部署 Caddy 时自动重写本文件。
+
+:80 {
+    encode gzip
+    reverse_proxy warp-web-tool:8000
+}

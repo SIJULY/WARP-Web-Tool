@@ -1,0 +1,12 @@
+services:
+  warp-web-tool:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: warp-web-tool:local
+    container_name: warp-web-tool
+    restart: always
+    ports:
+      - "0.0.0.0:8000:8000"
+    environment:
+      - TZ=Asia/Shanghai
