@@ -1,11 +1,7 @@
 import os
-import json
 import base64
 import secrets
 import asyncio
-import time
-import ipaddress
-import random
 import re
 import httpx
 import datetime
@@ -92,49 +88,9 @@ def client_id_to_reserved(client_id):
 
 
 # ==========================================
-# 2. WARP 异步优选 IP
+# 2. WARP 默认 Endpoint
 # ==========================================
-CF_WARP_IPV4_CIDRS = ["162.159.192.0/24", "162.159.193.0/24", "162.159.195.0/24", "188.114.96.0/24", "188.114.97.0/24"]
-
-
-def get_random_ips(count=100):
-    all_ips = []
-    for cidr in CF_WARP_IPV4_CIDRS:
-        network = ipaddress.ip_network(cidr)
-        all_ips.extend([str(ip) for ip in network.hosts()])
-    return random.sample(all_ips, min(count, len(all_ips)))
-
-
-async def async_tcp_ping(ip, port=2408, timeout=1.0):
-    try:
-        start_time = time.perf_counter()
-        fut = asyncio.open_connection(ip, port)
-        reader, writer = await asyncio.wait_for(fut, timeout=timeout)
-        writer.close()
-        await writer.wait_closed()
-        return ip, (time.perf_counter() - start_time) * 1000
-    except Exception:
-        return ip, -1
-
-
-async def scan_warp_ips(websocket: WebSocket, sample_size=100):
-    await send_log(websocket, f"📦 正在抽取 {sample_size} 个 IP 进行并发连通性测试...")
-    ips = get_random_ips(sample_size)
-    tasks = [async_tcp_ping(ip) for ip in ips]
-    results = await asyncio.gather(*tasks)
-
-    valid_results = [(ip, lat) for ip, lat in results if lat != -1]
-    valid_results.sort(key=lambda x: x[1])
-
-    if not valid_results:
-        await send_log(websocket, "❌ 未发现存活 IP，使用默认兜底 IP。")
-        return "162.159.193.10"
-
-    await send_log(websocket, f"✅ 成功找到 {len(valid_results)} 个存活 IP！")
-    for i, (ip, lat) in enumerate(valid_results[:10]):
-        await send_log(websocket, f"[{i + 1}] 延迟: {lat:.1f}ms => {ip}")
-
-    return valid_results[0][0]
+DEFAULT_WARP_ENDPOINT = "162.159.193.10"
 
 
 # ==========================================
@@ -266,8 +222,9 @@ async def websocket_endpoint(websocket: WebSocket):
             access_jwt = await extract_cloudflare_token(websocket, org, email, state)
             await send_log(websocket, "✅ 成功截获 Access JWT！")
 
-            # 2. 优选 IP
-            best_ip = await scan_warp_ips(websocket, sample_size=30)
+            # 2. 使用默认 WARP Endpoint
+            best_ip = DEFAULT_WARP_ENDPOINT
+            await send_log(websocket, f"ℹ️ 已关闭 IP 优选，使用默认 WARP Endpoint: {best_ip}:2408")
 
             # 3. 注册 Cloudflare 设备
             await send_log(websocket, "⏳ 正在生成本地密钥并注册设备...")
@@ -338,14 +295,6 @@ async def websocket_endpoint(websocket: WebSocket):
         finally:
             state["otp_future"] = None
 
-    async def process_scan():
-        try:
-            best_ip = await scan_warp_ips(websocket, sample_size=100)
-            await send_log(websocket, f"🎯 最优直连网关: {best_ip}:2408")
-        except Exception as e:
-            logger.exception("扫描任务失败")
-            await websocket.send_json({"type": "log", "msg": f"❌ 扫描中断: {str(e)}"})
-
     try:
         while True:
             data = await websocket.receive_json()
@@ -354,8 +303,6 @@ async def websocket_endpoint(websocket: WebSocket):
             if action == "submit_otp" and state["otp_future"] and not state["otp_future"].done():
                 logger.info("收到前端提交的验证码")
                 state["otp_future"].set_result(data.get("otp"))
-            elif action == "start_scan":
-                asyncio.create_task(process_scan())
             elif action == "start_extract":
                 asyncio.create_task(process_extraction(data))
 

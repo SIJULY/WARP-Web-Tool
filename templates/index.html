@@ -89,14 +89,10 @@
                        class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500 transition-colors">
             </div>
 
-            <div class="flex flex-col xl:flex-row space-y-3 xl:space-y-0 xl:space-x-3 pt-4">
+            <div class="flex pt-4">
                 <button onclick="startExtract()"
-                        class="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-4 rounded-lg shadow-lg transition-all active:scale-95">
+                        class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-4 rounded-lg shadow-lg transition-all active:scale-95">
                     提取节点信息
-                </button>
-                <button onclick="startScan()"
-                        class="flex-1 bg-green-600 hover:bg-green-500 text-white font-bold py-3 px-4 rounded-lg shadow-lg transition-all active:scale-95">
-                    仅优选 IP
                 </button>
             </div>
         </div>
@@ -359,11 +355,6 @@
             email: email,
             proxy_name: document.getElementById('proxy_name').value
         });
-    }
-
-    function startScan() {
-        logArea.innerHTML = `<div><span class="text-gray-500">[${new Date().toLocaleTimeString()}]</span> > 启动 IP 优选任务...</div>`;
-        sendWS({action: 'start_scan'});
     }
 
     function submitOTP() {
