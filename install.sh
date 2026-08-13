@@ -28,7 +28,7 @@ PLAIN="\033[0m"
 
 print_info() { echo -e "${BLUE}[信息]${PLAIN} $1"; }
 print_success() { echo -e "${GREEN}[成功]${PLAIN} $1"; }
-print_warn() { echo -e "${YELLOW}[提示]${PLAIN} $1"; }
+print_warn() { echo -e "${YELLOW}[提示]${PLAIN} $1" >&2; }
 print_error() { echo -e "${RED}[错误]${PLAIN} $1"; exit 1; }
 
 require_root() {
@@ -86,6 +86,18 @@ check_basic_deps() {
     command -v git &>/dev/null || install_pkg git
 }
 
+cleanup_previous_failed_install() {
+    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "${APP_CONTAINER}"; then
+        print_warn "检测到上次安装残留容器 ${APP_CONTAINER}，正在清理..."
+        docker rm -f "${APP_CONTAINER}" >/dev/null 2>&1 || true
+    fi
+
+    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "${PROJECT_NAME}-caddy"; then
+        print_warn "检测到上次安装残留容器 ${PROJECT_NAME}-caddy，正在清理..."
+        docker rm -f "${PROJECT_NAME}-caddy" >/dev/null 2>&1 || true
+    fi
+}
+
 install_source_code() {
     print_info "正在拉取源码仓库：${GIT_REPO_URL}"
     rm -rf "${INSTALL_DIR}"
@@ -117,6 +129,59 @@ get_public_ip() {
     curl -4fsS --max-time 5 https://api.ipify.org 2>/dev/null || \
     hostname -I 2>/dev/null | awk '{print $1}' || \
     echo "服务器IP"
+}
+
+is_port_in_use() {
+    local port="$1"
+    if command -v ss &>/dev/null; then
+        ss -ltn "sport = :${port}" 2>/dev/null | awk 'NR>1 {found=1} END {exit found ? 0 : 1}'
+    elif command -v netstat &>/dev/null; then
+        netstat -ltn 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" {found=1} END {exit found ? 0 : 1}'
+    elif command -v lsof &>/dev/null; then
+        lsof -iTCP:"${port}" -sTCP:LISTEN -Pn &>/dev/null
+    else
+        return 1
+    fi
+}
+
+find_available_port() {
+    local start_port="$1"
+    local port="${start_port}"
+    while is_port_in_use "${port}"; do
+        port=$((port + 1))
+    done
+    echo "${port}"
+}
+
+prompt_available_port() {
+    local default_port="$1"
+    local prompt_text="$2"
+    local suggested_port="${default_port}"
+    local input_port=""
+
+    if is_port_in_use "${suggested_port}"; then
+        suggested_port="$(find_available_port "${suggested_port}")"
+        print_warn "端口 ${default_port} 已被占用，已为你推荐可用端口 ${suggested_port}"
+    fi
+
+    while true; do
+        read -rp "${prompt_text} [${suggested_port}]: " input_port
+        input_port="${input_port:-${suggested_port}}"
+
+        if ! [[ "${input_port}" =~ ^[0-9]+$ ]] || [ "${input_port}" -lt 1 ] || [ "${input_port}" -gt 65535 ]; then
+            print_warn "请输入 1-65535 之间的有效端口"
+            continue
+        fi
+
+        if is_port_in_use "${input_port}"; then
+            suggested_port="$(find_available_port "$((input_port + 1))")"
+            print_warn "端口 ${input_port} 已被占用，请换一个端口。推荐：${suggested_port}"
+            continue
+        fi
+
+        echo "${input_port}"
+        return 0
+    done
 }
 
 write_install_env() {
@@ -280,6 +345,7 @@ install_panel() {
     require_root
     check_basic_deps
     check_docker
+    cleanup_previous_failed_install
     install_source_code
 
     echo -e "\n${YELLOW}--- 访问方式 ---${PLAIN}"
@@ -299,8 +365,7 @@ install_panel() {
         read -rp "请输入已解析到本 VPS 的域名: " domain
         [ -n "${domain}" ] || print_error "域名不能为空"
         port="8001"
-        read -rp "应用本地监听端口 [${port}]: " input_port
-        port="${input_port:-${port}}"
+        port="$(prompt_available_port "${port}" "应用本地监听端口")"
 
         local caddy_result
         caddy_result="$(configure_caddy_for_domain "${domain}" "${port}" | tail -n 1)"
@@ -318,8 +383,7 @@ install_panel() {
         access_url="https://${domain}"
         write_install_env "domain" "${domain}" "${port}" "${caddy_mode}" "${caddy_file}" "${caddy_container}"
     else
-        read -rp "开放端口 [${APP_PORT}]: " input_port
-        port="${input_port:-${APP_PORT}}"
+        port="$(prompt_available_port "${APP_PORT}" "开放端口")"
         generate_compose "0.0.0.0" "${port}" "false"
         local public_ip
         public_ip="$(get_public_ip)"

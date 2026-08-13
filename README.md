@@ -30,6 +30,8 @@ GIT_REPO_URL="https://github.com/你的用户名/你的仓库.git" bash <(curl -
 http://服务器IP:8000
 ```
 
+如果默认端口已被其他服务占用，安装脚本会自动检测并推荐下一个可用端口。
+
 ### 2. 域名 + 自动 HTTPS 模式
 
 输入已经解析到 VPS 的域名后，脚本会自动配置 Caddy：
