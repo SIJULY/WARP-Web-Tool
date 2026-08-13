@@ -199,9 +199,18 @@ async def extract_cloudflare_token(websocket: WebSocket, org: str, email: str, s
                 await code_input.wait_for(state="visible", timeout=5000)
                 await code_input.fill(otp)
             except:
-                await page.locator('input').first.fill(otp)
+                code_input = page.locator('input').first
+                await code_input.fill(otp)
 
-            await page.locator('button[type="submit"]').click()
+            await send_log(websocket, "⏳ [后台] 验证码已填入，正在点击提交按钮...")
+            try:
+                # Playwright 的 click 默认会等待元素可操作，部分 VPS/Cloudflare 页面会在这里长时间卡住。
+                # 使用短超时并禁用 after-action 导航等待；失败时改用回车提交表单。
+                await page.locator('button[type="submit"]').click(timeout=3000, no_wait_after=True)
+            except Exception as e:
+                await send_log(websocket, f"⚠️ [后台] 点击提交按钮超时/失败，改用回车提交: {type(e).__name__}")
+                await code_input.press("Enter")
+            await send_log(websocket, "⏳ [后台] 已触发提交，正在截获授权 Token...")
 
             # 核心优化：急速轮询替代死等 (每0.5秒检查一次，最多等5秒)
             for _ in range(10):
