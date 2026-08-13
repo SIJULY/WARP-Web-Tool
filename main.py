@@ -191,11 +191,8 @@ async def extract_cloudflare_token(websocket: WebSocket, org: str, email: str, s
             await websocket.send_json({"type": "prompt_otp"})
             await send_log(websocket, "⏳ [等待输入] 全新验证码已发送至邮箱，请查收并输入...")
 
-            try:
-                otp = await asyncio.wait_for(state["otp_future"], timeout=300)
-            except asyncio.TimeoutError:
-                raise Exception("等待验证码输入超时，请重新开始提取任务。")
-            await send_log(websocket, "⏳ [后台] 已收到验证码，正在提交并校验...")
+            otp = await state["otp_future"]
+            await send_log(websocket, "⏳ [后台] 正在提交验证码并急速校验...")
 
             try:
                 code_input = page.locator('input[name="code"]')
@@ -206,8 +203,8 @@ async def extract_cloudflare_token(websocket: WebSocket, org: str, email: str, s
 
             await page.locator('button[type="submit"]').click()
 
-            # 急速轮询等待 Token。Cloudflare 有时跳转较慢，最多等待 30 秒。
-            for i in range(60):
+            # 核心优化：急速轮询替代死等 (每0.5秒检查一次，最多等5秒)
+            for _ in range(10):
                 capture_token_from_url(page.url)
                 cookies = await context.cookies()
                 for c in cookies:
@@ -216,8 +213,6 @@ async def extract_cloudflare_token(websocket: WebSocket, org: str, email: str, s
                         break
                 if access_jwt:
                     break
-                if i in (9, 29):
-                    await send_log(websocket, "⏳ [后台] 仍在等待 Cloudflare 校验跳转，请稍候...")
                 await asyncio.sleep(0.5)
 
             # 关闭当前页面，为潜在的下一次重试清理环境
@@ -227,7 +222,7 @@ async def extract_cloudflare_token(websocket: WebSocket, org: str, email: str, s
                 break
             else:
                 if attempt < max_retries - 1:
-                    await send_log(websocket, "❌ 验证失败：验证码错误、已过期或 Cloudflare 未完成跳转，即将重新获取...")
+                    await send_log(websocket, "❌ 验证失败：验证码错误或已过期！即将重新获取...")
                 else:
                     raise Exception("连续 3 次验证失败，流程中断。")
 
