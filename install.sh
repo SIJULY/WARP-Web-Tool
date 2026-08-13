@@ -153,6 +153,10 @@ find_available_port() {
     echo "${port}"
 }
 
+is_systemd_caddy_active() {
+    systemctl is-active --quiet caddy 2>/dev/null
+}
+
 prompt_available_port() {
     local default_port="$1"
     local prompt_text="$2"
@@ -305,14 +309,18 @@ configure_caddy_for_domain() {
     local domain="$1"
     local port="$2"
 
-    # 1) 优先复用宿主机 systemd Caddy
-    if systemctl list-unit-files 2>/dev/null | grep -q '^caddy\.service'; then
+    # 1) 优先复用正在运行的宿主机 systemd Caddy。只安装但启动失败的 Caddy 不能安全复用。
+    if is_systemd_caddy_active; then
         local host_caddy_file="/etc/caddy/Caddyfile"
         print_info "检测到宿主机 Caddy，将追加反代配置到 ${host_caddy_file}"
         append_caddy_config "${host_caddy_file}" "${domain}" "127.0.0.1:${port}"
         reload_host_caddy "${host_caddy_file}"
         echo "host|${host_caddy_file}|"
         return 0
+    fi
+
+    if systemctl list-unit-files 2>/dev/null | grep -q '^caddy\.service'; then
+        print_warn "检测到宿主机已安装 Caddy，但当前不是 active 状态，将不会复用该 Caddy。"
     fi
 
     # 2) 再尝试复用已有 Docker Caddy（要求 /etc/caddy/Caddyfile 有宿主机文件挂载）
@@ -336,6 +344,10 @@ configure_caddy_for_domain() {
     fi
 
     # 3) 未检测到已有 Caddy，启用本项目 Caddy
+    if is_port_in_use 80 || is_port_in_use 443; then
+        print_error "未检测到可复用的 Caddy，但 80/443 端口已被占用，无法启动本项目自带 Caddy。请先确认占用 80/443 的服务，并把 ${domain} 反代到本项目端口 ${port}，或释放 80/443 后重试。"
+    fi
+
     print_info "未检测到已有 Caddy，将启用本项目自带 Caddy 容器"
     write_project_caddyfile "${domain}"
     echo "project||${PROJECT_NAME}-caddy"

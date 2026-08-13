@@ -37,8 +37,10 @@ http://服务器IP:8000
 输入已经解析到 VPS 的域名后，脚本会自动配置 Caddy：
 
 - 如果检测到宿主机已有 `caddy.service`：追加本项目配置到 `/etc/caddy/Caddyfile`，并 reload Caddy。
+- 只有宿主机 `caddy.service` 正在运行（`active`）时才会复用；如果 Caddy 已安装但启动失败，脚本不会复用，避免误判。
 - 如果检测到已有 Docker Caddy，且 `/etc/caddy/Caddyfile` 是宿主机文件挂载：追加本项目配置并 reload 容器内 Caddy；此模式下应用端口会监听到宿主机网络，供已有 Caddy 容器反代访问。
 - 如果未检测到任何 Caddy：自动启用本项目自带的 Caddy 容器，占用 `80/443` 并签发 HTTPS 证书。
+- 如果没有可复用 Caddy，但 `80/443` 已被占用：脚本会中止，避免影响 VPS 上已有站点。
 - 如果检测到已有 Docker Caddy 但无法安全编辑其 Caddyfile：脚本会中止，避免影响 VPS 上已有项目。
 
 脚本写入已有 Caddy 时会使用如下标记块，卸载时只删除本项目配置，不影响其他站点：
