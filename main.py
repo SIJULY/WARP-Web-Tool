@@ -9,6 +9,7 @@ import random
 import re
 import httpx
 import datetime
+import logging
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -17,6 +18,12 @@ from playwright.async_api import async_playwright
 
 app = FastAPI(title="ZERO-Sijuly Web Tool")
 templates = Jinja2Templates(directory="templates")
+logger = logging.getLogger("warp-web-tool")
+
+
+async def send_log(websocket: WebSocket, msg: str):
+    logger.info(msg)
+    await websocket.send_json({"type": "log", "msg": msg})
 
 # ==========================================
 # 1. 核心加密与工具函数
@@ -109,7 +116,7 @@ async def async_tcp_ping(ip, port=2408, timeout=1.0):
 
 
 async def scan_warp_ips(websocket: WebSocket, sample_size=100):
-    await websocket.send_json({"type": "log", "msg": f"📦 正在抽取 {sample_size} 个 IP 进行并发连通性测试..."})
+    await send_log(websocket, f"📦 正在抽取 {sample_size} 个 IP 进行并发连通性测试...")
     ips = get_random_ips(sample_size)
     tasks = [async_tcp_ping(ip) for ip in ips]
     results = await asyncio.gather(*tasks)
@@ -118,12 +125,12 @@ async def scan_warp_ips(websocket: WebSocket, sample_size=100):
     valid_results.sort(key=lambda x: x[1])
 
     if not valid_results:
-        await websocket.send_json({"type": "log", "msg": "❌ 未发现存活 IP，使用默认兜底 IP。"})
+        await send_log(websocket, "❌ 未发现存活 IP，使用默认兜底 IP。")
         return "162.159.193.10"
 
-    await websocket.send_json({"type": "log", "msg": f"✅ 成功找到 {len(valid_results)} 个存活 IP！"})
+    await send_log(websocket, f"✅ 成功找到 {len(valid_results)} 个存活 IP！")
     for i, (ip, lat) in enumerate(valid_results[:10]):
-        await websocket.send_json({"type": "log", "msg": f"[{i + 1}] 延迟: {lat:.1f}ms => {ip}"})
+        await send_log(websocket, f"[{i + 1}] 延迟: {lat:.1f}ms => {ip}")
 
     return valid_results[0][0]
 
@@ -162,11 +169,10 @@ async def extract_cloudflare_token(websocket: WebSocket, org: str, email: str, s
             page.on("request", lambda req: capture_token_from_url(req.url))
             page.on("response", lambda resp: capture_token_from_url(resp.url))
 
-            await websocket.send_json(
-                {"type": "log", "msg": f"🌍 [后台] 正在初始化安全会话 (第 {attempt + 1} 次尝试)..."})
+            await send_log(websocket, f"🌍 [后台] 正在初始化安全会话 (第 {attempt + 1} 次尝试)...")
             await page.goto(f"https://{org}.cloudflareaccess.com/warp")
 
-            await websocket.send_json({"type": "log", "msg": "⏳ [后台] 正在向 Cloudflare 请求发送全新验证码..."})
+            await send_log(websocket, "⏳ [后台] 正在向 Cloudflare 请求发送全新验证码...")
             try:
                 email_input = page.get_by_placeholder("example@email.com")
                 await email_input.wait_for(state="visible", timeout=10000)
@@ -181,10 +187,13 @@ async def extract_cloudflare_token(websocket: WebSocket, org: str, email: str, s
                 state["otp_future"] = asyncio.Future()
 
             await websocket.send_json({"type": "prompt_otp"})
-            await websocket.send_json({"type": "log", "msg": "⏳ [等待输入] 全新验证码已发送至邮箱，请查收并输入..."})
+            await send_log(websocket, "⏳ [等待输入] 全新验证码已发送至邮箱，请查收并输入...")
 
-            otp = await state["otp_future"]
-            await websocket.send_json({"type": "log", "msg": "⏳ [后台] 正在提交验证码并急速校验..."})
+            try:
+                otp = await asyncio.wait_for(state["otp_future"], timeout=300)
+            except asyncio.TimeoutError:
+                raise Exception("等待验证码输入超时，请重新开始提取任务。")
+            await send_log(websocket, "⏳ [后台] 已收到验证码，正在提交并校验...")
 
             try:
                 code_input = page.locator('input[name="code"]')
@@ -195,8 +204,8 @@ async def extract_cloudflare_token(websocket: WebSocket, org: str, email: str, s
 
             await page.locator('button[type="submit"]').click()
 
-            # 核心优化：急速轮询替代死等 (每0.5秒检查一次，最多等5秒)
-            for _ in range(10):
+            # 急速轮询等待 Token。Cloudflare 有时跳转较慢，最多等待 30 秒。
+            for i in range(60):
                 capture_token_from_url(page.url)
                 cookies = await context.cookies()
                 for c in cookies:
@@ -205,6 +214,8 @@ async def extract_cloudflare_token(websocket: WebSocket, org: str, email: str, s
                         break
                 if access_jwt:
                     break
+                if i in (9, 29):
+                    await send_log(websocket, "⏳ [后台] 仍在等待 Cloudflare 校验跳转，请稍候...")
                 await asyncio.sleep(0.5)
 
             # 关闭当前页面，为潜在的下一次重试清理环境
@@ -214,7 +225,7 @@ async def extract_cloudflare_token(websocket: WebSocket, org: str, email: str, s
                 break
             else:
                 if attempt < max_retries - 1:
-                    await websocket.send_json({"type": "log", "msg": "❌ 验证失败：验证码错误或已过期！即将重新获取..."})
+                    await send_log(websocket, "❌ 验证失败：验证码错误、已过期或 Cloudflare 未完成跳转，即将重新获取...")
                 else:
                     raise Exception("连续 3 次验证失败，流程中断。")
 
@@ -247,13 +258,13 @@ async def websocket_endpoint(websocket: WebSocket):
         try:
             # 1. 提取 Token
             access_jwt = await extract_cloudflare_token(websocket, org, email, state)
-            await websocket.send_json({"type": "log", "msg": "✅ 成功截获 Access JWT！"})
+            await send_log(websocket, "✅ 成功截获 Access JWT！")
 
             # 2. 优选 IP
             best_ip = await scan_warp_ips(websocket, sample_size=30)
 
             # 3. 注册 Cloudflare 设备
-            await websocket.send_json({"type": "log", "msg": "⏳ 正在生成本地密钥并注册设备..."})
+            await send_log(websocket, "⏳ 正在生成本地密钥并注册设备...")
             priv_key, pub_key = generate_keypair()
             install_id = random_install_id()
             fcm_token = f"{install_id}:APA91b{''.join(secrets.choice('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(134))}"
@@ -280,7 +291,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 auth_headers = dict(headers)
                 auth_headers["Authorization"] = f"Bearer {device_token}"
 
-                await websocket.send_json({"type": "log", "msg": "⏳ 正在拉取最终路由配置..."})
+                await send_log(websocket, "⏳ 正在拉取最终路由配置...")
                 conf_resp = await client.get(f"{cf_api}/reg/{device_id}", headers=auth_headers, timeout=10.0)
                 config = conf_resp.json()["config"]
 
@@ -313,9 +324,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     "Shadowrocket": sr_conf
                 }
             })
-            await websocket.send_json({"type": "log", "msg": "🎉 节点提取与配置生成完毕！"})
+            await send_log(websocket, "🎉 节点提取与配置生成完毕！")
 
         except Exception as e:
+            logger.exception("提取任务失败")
             await websocket.send_json({"type": "log", "msg": f"❌ {str(e)}"})
         finally:
             state["otp_future"] = None
@@ -323,8 +335,9 @@ async def websocket_endpoint(websocket: WebSocket):
     async def process_scan():
         try:
             best_ip = await scan_warp_ips(websocket, sample_size=100)
-            await websocket.send_json({"type": "log", "msg": f"🎯 最优直连网关: {best_ip}:2408"})
+            await send_log(websocket, f"🎯 最优直连网关: {best_ip}:2408")
         except Exception as e:
+            logger.exception("扫描任务失败")
             await websocket.send_json({"type": "log", "msg": f"❌ 扫描中断: {str(e)}"})
 
     try:
@@ -333,6 +346,7 @@ async def websocket_endpoint(websocket: WebSocket):
             action = data.get("action")
 
             if action == "submit_otp" and state["otp_future"] and not state["otp_future"].done():
+                logger.info("收到前端提交的验证码")
                 state["otp_future"].set_result(data.get("otp"))
             elif action == "start_scan":
                 asyncio.create_task(process_scan())
